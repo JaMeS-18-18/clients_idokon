@@ -60,7 +60,7 @@
 
   <body>
 
-    <h3 style="text-align: center;">I-Do‘kon Мижозлари</h3>
+    <h3 id="mainTitle" style="text-align: center;">I-Do‘kon Мижозлари</h3>
     <div class="tabs">
       <div class="tab active" onclick="showTab('mapTab')">🗺 Харита</div>
       <div class="tab" onclick="showTab('chartTab')">📊 График</div>
@@ -93,6 +93,9 @@
         const wb = XLSX.read(buffer, { type: "array" });
         const sheet = wb.Sheets[wb.SheetNames[0]];
         const rows = XLSX.utils.sheet_to_json(sheet);
+        
+        let mainTitle = document.getElementById("mainTitle");
+        mainTitle.textContent = `I-Do‘kon Мижозлари (${rows.length})`;
         const cleaned = rows.map(row => ({
           lat: parseFloat(row.Latitude),
           lng: parseFloat(row.Longitude),
@@ -115,7 +118,6 @@
       async function loadChartData() {
         const res = await fetch('data.json');
         const data = await res.json();
-
         data.forEach(({ region }) => {
           const key = region || "Noma’lum";
           regionStats[key] = (regionStats[key] || 0) + 1;
