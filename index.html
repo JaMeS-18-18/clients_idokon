@@ -1,56 +1,167 @@
 <!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <title>I-Do'kon</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-  <style>
-    #map {
-      height: 600px;
-      width: 100%;
-      margin-top: 20px;
-    }
-    body {
-      font-family: Arial, sans-serif;
-      padding: 20px;
-    }
-  </style>
-</head>
-<body>
-  <b id="title"></b>
-  <div id="map"></div>
+<html lang="uz">
 
-  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <head>
+    <meta charset="UTF-8" />
+    <title>I-Do‘kon Statistikasi</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        padding: 20px;
+        background-color: #f4f6f8;
+      }
 
-  <script>
-    const map = L.map("map").setView([41.3, 69.25], 7);
-    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-      attribution: '&copy; <a href="https://osm.org">OpenStreetMap</a> contributors',
-    }).addTo(map);
+      .tabs {
+        display: flex;
+        margin-bottom: 10px;
+      }
 
-    // EXCEL FAYLNI O‘QIYDI
-    fetch("koordinatalar.xlsx")
-      .then(res => res.arrayBuffer())
-      .then(data => {
-        const workbook = XLSX.read(data, { type: "array" });
-        const sheet = workbook.Sheets[workbook.SheetNames[0]];
+      .tab {
+        flex: 1;
+        text-align: center;
+        padding: 10px;
+        background: #eee;
+        cursor: pointer;
+        border-radius: 5px 5px 0 0;
+      }
+
+      .tab.active {
+        background: white;
+        font-weight: bold;
+      }
+
+      .tab-content {
+        display: none;
+        background: white;
+        padding: 20px;
+        border-radius: 0 0 10px 10px;
+        box-shadow: 0 0 10px #ccc;
+      }
+
+      .tab-content.active {
+        display: block;
+      }
+
+      #map {
+        height: 500px;
+        border-radius: 10px;
+      }
+
+      canvas {
+        max-width: 100%;
+        height: 400px;
+      }
+    </style>
+  </head>
+
+  <body>
+
+    <h3 style="text-align: center;">I-Do‘kon Мижозлари</h3>
+    <div class="tabs">
+      <div class="tab active" onclick="showTab('mapTab')">🗺 Харита</div>
+      <div class="tab" onclick="showTab('chartTab')">📊 График</div>
+    </div>
+
+    <div id="mapTab" class="tab-content active">
+      <div id="map"></div>
+    </div>
+
+    <div id="chartTab" class="tab-content">
+      <canvas id="barChart"></canvas>
+    </div>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+    <script>
+      let regionStats = {};
+
+      function showTab(id) {
+        document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
+        document.querySelectorAll('.tab').forEach(el => el.classList.remove('active'));
+        document.getElementById(id).classList.add('active');
+        document.querySelector(`.tab[onclick="showTab('${id}')"]`).classList.add('active');
+        if (id === 'chartTab') renderChart();
+      }
+
+      async function loadMapData() {
+        const res = await fetch('koordinatalar.xlsx');
+        const buffer = await res.arrayBuffer();
+        const wb = XLSX.read(buffer, { type: "array" });
+        const sheet = wb.Sheets[wb.SheetNames[0]];
         const rows = XLSX.utils.sheet_to_json(sheet);
-        document.getElementById("title").innerText = "📌 I-DO'KON Mijozlari" + ` (${rows.length} ta)`;
-        rows.forEach(row => {
-          const lat = parseFloat(row.Latitude);
-          const lng = parseFloat(row.Longitude);
-          if (!isNaN(lat) && !isNaN(lng)) {
-            L.marker([lat, lng])
-              .addTo(map)
-              .bindPopup(`Lat: ${lat}<br>Lng: ${lng}`);
+        const cleaned = rows.map(row => ({
+          lat: parseFloat(row.Latitude),
+          lng: parseFloat(row.Longitude),
+        })).filter(d => !isNaN(d.lat) && !isNaN(d.lng));
+
+        renderMap(cleaned);
+      }
+
+      function renderMap(data) {
+        const map = L.map("map").setView([41.3, 69.25], 7);
+        L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+          attribution: '&copy; OpenStreetMap contributors'
+        }).addTo(map);
+        data.forEach(({ lat, lng, region, district }) => {
+          L.marker([lat, lng]).addTo(map)
+            .bindPopup(`${region} → ${district}<br>Lat: ${lat}<br>Lng: ${lng}`);
+        });
+      }
+
+      async function loadChartData() {
+        const res = await fetch('data.json');
+        const data = await res.json();
+
+        data.forEach(({ region }) => {
+          const key = region || "Noma’lum";
+          regionStats[key] = (regionStats[key] || 0) + 1;
+        });
+      }
+
+      function renderChart() {
+        const ctx = document.getElementById("barChart").getContext("2d");
+        const labels = Object.keys(regionStats);
+        const values = Object.values(regionStats);
+
+        new Chart(ctx, {
+          type: 'bar',
+          data: {
+            labels,
+            datasets: [{
+              label: "Do‘konlar soni",
+              data: values,
+              backgroundColor: '#007bff'
+            }]
+          },
+          options: {
+            indexAxis: 'y',
+            responsive: true,
+            plugins: {
+              legend: { display: false },
+              tooltip: {
+                callbacks: {
+                  label: ctx => `${ctx.raw} ta do‘kon`
+                }
+              }
+            },
+            scales: {
+              x: {
+                beginAtZero: true,
+                title: { display: true, text: "Do‘konlar soni" }
+              }
+            }
           }
         });
-      })
-      .catch(err => {
-        console.error("Xatolik:", err);
-      });
-  </script>
-</body>
+      }
+
+      // Boshlanishda yuklash
+      loadMapData();
+      loadChartData();
+    </script>
+  </body>
+
 </html>
