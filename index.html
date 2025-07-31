@@ -93,7 +93,7 @@
         const wb = XLSX.read(buffer, { type: "array" });
         const sheet = wb.Sheets[wb.SheetNames[0]];
         const rows = XLSX.utils.sheet_to_json(sheet);
-        
+
         let mainTitle = document.getElementById("mainTitle");
         mainTitle.textContent = `I-Do‘kon Мижозлари (${rows.length})`;
         const cleaned = rows.map(row => ({
@@ -129,10 +129,12 @@
         const labels = Object.keys(regionStats);
         const values = Object.values(regionStats);
 
+        const labeledRegions = labels.map((label, idx) => `  ${label} ${values[idx]} ta`);
+
         new Chart(ctx, {
           type: 'bar',
           data: {
-            labels,
+            labels: labeledRegions,
             datasets: [{
               label: "Do‘konlar soni",
               data: values,
