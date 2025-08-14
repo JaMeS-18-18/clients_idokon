@@ -1,171 +1,310 @@
 <!DOCTYPE html>
 <html lang="uz">
+<head>
+  <meta charset="UTF-8" />
+  <title>I-Do‘kon Statistikasi</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    body { font-family: Arial, sans-serif; padding: 20px; background-color: #f4f6f8; }
+    .tabs { display: flex; margin-bottom: 10px; }
+    .tab { flex: 1; text-align: center; padding: 10px; background: #eee; cursor: pointer; border-radius: 5px 5px 0 0; }
+    .tab.active { background: white; font-weight: bold; }
+    .tab-content { display: none; background: white; padding: 20px; border-radius: 0 0 10px 10px; box-shadow: 0 0 10px #ccc; }
+    .tab-content.active { display: block; }
+    #map { height: 500px; border-radius: 10px; }
+    canvas { max-width: 100%; height: 400px; }
+  </style>
+</head>
+<body>
+  <h3 id="mainTitle" style="text-align:center">I-Do‘kon Мижозлари</h3>
 
-  <head>
-    <meta charset="UTF-8" />
-    <title>I-Do‘kon Statistikasi</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-    <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    <style>
-      body {
-        font-family: Arial, sans-serif;
-        padding: 20px;
-        background-color: #f4f6f8;
+  <div class="tabs">
+    <div class="tab active" onclick="showTab('mapTab')">🗺 Xarita</div>
+    <div class="tab" onclick="showTab('chartTab')">📊 Grafik</div>
+  </div>
+
+  <div id="filters" style="display:flex; gap:10px; align-items:center; justify-content:center; margin:10px 0 16px;">
+    <select id="cityFilter" style="padding:8px 10px; border-radius:8px; border:1px solid #ddd; background:#fff; min-width:220px;">
+      <option value="">Viloyatlar</option>
+    </select>
+    <div id="loginSearch"></div>
+    <button id="resetFilters" type="button"
+            style="padding:8px 12px; border-radius:8px; border:1px solid #ddd; background:#f7f7f7; cursor:pointer;">
+      ♻️ Tozalash
+    </button>
+  </div>
+
+  <div id="mapTab" class="tab-content active"><div id="map"></div></div>
+  <div id="chartTab" class="tab-content"><canvas id="barChart"></canvas></div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script>
+    // ===================== GLOBAL =====================
+    let allRows = [];
+    let filteredRows = [];
+    let barChartRef = null;
+    let mapRef = null, layerGroup = null;
+    let phoneByLogin = new Map();
+
+    // ===================== HELPERS =====================
+    const toNumber = (v) => {
+      const n = parseFloat(String(v).replace(",", "."));
+      return isNaN(n) ? null : n;
+    };
+    const norm = (s) => (s == null ? "" : String(s).trim().toLowerCase().replace(/\s+/g," "));
+    const cleanRegionName = (s) => {
+      let x = norm(s);
+      x = x.replace(/\s+(viloyati|viloyat|v\.)$/i, "");
+      x = x.replace(/\s+(область|обл\.)$/i, "");
+      return x.trim();
+    };
+
+    function pickRegion(row) {
+      const candidates = [
+        "regionName","RegionName","region","Region","Viloyat","viloyat","address.region","address.Region","cityName","CityName"
+      ];
+      for (const key of candidates) {
+        if (row[key] != null && String(row[key]).trim() !== "") {
+          const cleaned = cleanRegionName(row[key]);
+          if (cleaned) return cleaned;
+        }
       }
+      const dyn = Object.keys(row).find(k => /region/i.test(k));
+      return dyn ? cleanRegionName(row[dyn]) : "noma’lum";
+    }
 
-      .tabs {
-        display: flex;
-        margin-bottom: 10px;
+    function pickDistrict(row) {
+      const candidates = [
+        "district","District","tuman","Tuman","city","City","address.district","address.District","address.city","address.City","shahar","Shahar"
+      ];
+      for (const c of candidates) {
+        if (row[c] != null && String(row[c]).trim() !== "") return String(row[c]).trim();
       }
+      const dyn = Object.keys(row).find(k => /(district|tuman|city|shahar)/i.test(k));
+      return dyn ? String(row[dyn]).trim() : "—";
+    }
 
-      .tab {
-        flex: 1;
-        text-align: center;
-        padding: 10px;
-        background: #eee;
-        cursor: pointer;
-        border-radius: 5px 5px 0 0;
+    function pickLogin(row) {
+      const candidates = ["ownerLogin","login","userLogin","owner_login","owner.login","Login"];
+      for (const c of candidates) {
+        if (row[c] != null && String(row[c]).trim() !== "") return String(row[c]).trim();
       }
+      const dyn = Object.keys(row).find(k => k.toLowerCase().includes("login"));
+      return dyn ? String(row[dyn]).trim() : "";
+    }
 
-      .tab.active {
-        background: white;
-        font-weight: bold;
+    function pickLatLng(row) {
+      let lat = null, lng = null;
+      if (row.Latitude != null)  lat = toNumber(row.Latitude);
+      if (row.Longitude != null) lng = toNumber(row.Longitude);
+      if (lat == null) {
+        const k = Object.keys(row).find(k => k.toLowerCase() === "lat" || k.toLowerCase().includes("latitude"));
+        if (k) lat = toNumber(row[k]);
       }
-
-      .tab-content {
-        display: none;
-        background: white;
-        padding: 20px;
-        border-radius: 0 0 10px 10px;
-        box-shadow: 0 0 10px #ccc;
+      if (lng == null) {
+        const k = Object.keys(row).find(k => k.toLowerCase() === "lng" || k.toLowerCase().includes("longitude") || k.toLowerCase().includes("lon"));
+        if (k) lng = toNumber(row[k]);
       }
+      return { lat, lng };
+    }
 
-      .tab-content.active {
-        display: block;
-      }
+    function resolvePhone(row) {
+      const login = norm(pickLogin(row));
+      if (login && phoneByLogin.has(login)) return phoneByLogin.get(login);
+      return row.phone || row["Telefon"] || row["phone"] || "—";
+    }
 
-      #map {
-        height: 500px;
-        border-radius: 10px;
-      }
+    function buildPopupHTML(row) {
+      const shopName = row.name || row["Do'kon nomi"] || row["shopName"] || "—";
+      const phone    = resolvePhone(row);
+      const district = pickDistrict(row);
+      const region   = pickRegion(row);
 
-      canvas {
-        max-width: 100%;
-        height: 400px;
-      }
-    </style>
-  </head>
+      return `
+        <div style="min-width:220px">
+          <table style="border-collapse:collapse;width:100%">
+            <tr>
+              <td style="border-bottom:1px solid #eee;padding:4px 6px;color:#666">Do‘kon nomi</td>
+              <td style="border-bottom:1px solid #eee;padding:4px 6px;font-weight:600">${shopName}</td>
+            </tr>
+            <tr>
+              <td style="border-bottom:1px solid #eee;padding:4px 6px;color:#666">Telefon</td>
+              <td style="border-bottom:1px solid #eee;padding:4px 6px;font-weight:600">${phone}</td>
+            </tr>
+            <tr>
+              <td style="border-bottom:1px solid #eee;padding:4px 6px;color:#666">Tuman</td>
+              <td style="border-bottom:1px solid #eee;padding:4px 6px;font-weight:600">${district}</td>
+            </tr>
+            <tr>
+              <td style="border-bottom:1px solid #eee;padding:4px 6px;color:#666">Viloyat</td>
+              <td style="border-bottom:1px solid #eee;padding:4px 6px;font-weight:600">${region}</td>
+            </tr>
+          </table>
+        </div>`;
+    }
 
-  <body>
+    function debounce(fn, delay = 300) {
+      let t = null;
+      return (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), delay); };
+    }
 
-    <h3 id="mainTitle" style="text-align: center;">I-Do‘kon Мижозлари</h3>
-    <div class="tabs">
-      <div class="tab active" onclick="showTab('mapTab')">🗺 Харита</div>
-      <div class="tab" onclick="showTab('chartTab')">📊 График</div>
-    </div>
-
-    <div id="mapTab" class="tab-content active">
-      <div id="map"></div>
-    </div>
-
-    <div id="chartTab" class="tab-content">
-      <canvas id="barChart"></canvas>
-    </div>
-
-    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-
-    <script>
-      let regionStats = {};
-
-      function showTab(id) {
-        document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
-        document.querySelectorAll('.tab').forEach(el => el.classList.remove('active'));
-        document.getElementById(id).classList.add('active');
-        document.querySelector(`.tab[onclick="showTab('${id}')"]`).classList.add('active');
-        if (id === 'chartTab') renderChart();
-      }
-
-      async function loadMapData() {
-        const res = await fetch('koordinatalar.xlsx');
-        const buffer = await res.arrayBuffer();
-        const wb = XLSX.read(buffer, { type: "array" });
-        const sheet = wb.Sheets[wb.SheetNames[0]];
-        const rows = XLSX.utils.sheet_to_json(sheet);
-
-        let mainTitle = document.getElementById("mainTitle");
-        mainTitle.textContent = `I-Do‘kon Мижозлари (${rows.length})`;
-        const cleaned = rows.map(row => ({
-          lat: parseFloat(row.Latitude),
-          lng: parseFloat(row.Longitude),
-        })).filter(d => !isNaN(d.lat) && !isNaN(d.lng));
-
-        renderMap(cleaned);
-      }
-
-      function renderMap(data) {
-        const map = L.map("map").setView([41.3, 69.25], 7);
+    // ===================== RENDERING =====================
+    function ensureMap() {
+      if (!mapRef) {
+        mapRef = L.map("map").setView([41.3, 69.25], 7);
         L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-          attribution: '&copy; OpenStreetMap contributors'
-        }).addTo(map);
-        data.forEach(({ lat, lng, region, district }) => {
-          L.marker([lat, lng]).addTo(map)
-            .bindPopup(`${region} → ${district}<br>Lat: ${lat}<br>Lng: ${lng}`);
-        });
+          attribution: "&copy; OpenStreetMap contributors", maxZoom: 19
+        }).addTo(mapRef);
+        layerGroup = L.layerGroup().addTo(mapRef);
       }
+    }
 
-      async function loadChartData() {
-        const res = await fetch('data.json');
-        const data = await res.json();
-        data.forEach(({ region }) => {
-          const key = region || "Noma’lum";
-          regionStats[key] = (regionStats[key] || 0) + 1;
-        });
+    function renderMap(rows) {
+      ensureMap();
+      layerGroup.clearLayers();
+      rows.forEach(row => {
+        const { lat, lng } = pickLatLng(row);
+        if (lat == null || lng == null) return;
+        L.marker([lat, lng]).addTo(layerGroup).bindPopup(buildPopupHTML(row));
+      });
+      const coords = rows.map(r => pickLatLng(r)).filter(({lat,lng}) => lat!=null && lng!=null);
+      if (coords.length) {
+        const bounds = L.latLngBounds(coords.map(c => [c.lat, c.lng]));
+        mapRef.fitBounds(bounds.pad(0.2));
       }
+    }
 
-      function renderChart() {
-        const ctx = document.getElementById("barChart").getContext("2d");
-        const labels = Object.keys(regionStats);
-        const values = Object.values(regionStats);
+    function renderChartFromRows(rows) {
+      const counts = {};
+      rows.forEach(r => {
+        const reg = pickRegion(r) || "noma’lum";
+        counts[reg] = (counts[reg] || 0) + 1;
+      });
+      const labels = Object.keys(counts);
+      const values = Object.values(counts);
+      const labeled = labels.map((l,i) => `  ${l} ${values[i]} ta`);
 
-        const labeledRegions = labels.map((label, idx) => `  ${label} ${values[idx]} ta`);
+      const ctx = document.getElementById("barChart").getContext("2d");
+      if (barChartRef) { barChartRef.destroy(); barChartRef = null; }
+      barChartRef = new Chart(ctx, {
+        type: "bar",
+        data: { labels: labeled, datasets: [{ label: "Do‘konlar soni", data: values }] },
+        options: {
+          indexAxis: "y", responsive: true,
+          plugins: { legend: { display: false }, tooltip: { callbacks: { label: c => `${c.raw} ta do‘kon` } } },
+          scales: { x: { beginAtZero: true, title: { display: true, text: "Do‘konlar soni" }, ticks: { precision: 0 } } }
+        }
+      });
+    }
 
-        new Chart(ctx, {
-          type: 'bar',
-          data: {
-            labels: labeledRegions,
-            datasets: [{
-              label: "Do‘konlar soni",
-              data: values,
-              backgroundColor: '#007bff'
-            }]
-          },
-          options: {
-            indexAxis: 'y',
-            responsive: true,
-            plugins: {
-              legend: { display: false },
-              tooltip: {
-                callbacks: {
-                  label: ctx => `${ctx.raw} ta do‘kon`
-                }
-              }
-            },
-            scales: {
-              x: {
-                beginAtZero: true,
-                title: { display: true, text: "Do‘konlar soni" }
-              }
-            }
-          }
+    function updateTitle(count) {
+      document.getElementById("mainTitle").textContent = `I-Do‘kon Мижозлари (${count})`;
+    }
+
+    // ===================== FILTERS =====================
+    const filterState = { region: "", loginQuery: "" };
+
+    function populateRegionSelect(rows) {
+      const set = new Set();
+      rows.forEach(r => { const reg = pickRegion(r); if (reg) set.add(reg); });
+      const regions = Array.from(set).sort((a,b)=>a.localeCompare(b,"uz-Latn",{sensitivity:"base"}));
+
+      const sel = document.getElementById("cityFilter");
+      sel.querySelectorAll("option:not(:first-child)").forEach(o=>o.remove());
+      regions.forEach(region => {
+        const opt = document.createElement("option");
+        opt.value = region; opt.textContent = region;
+        sel.appendChild(opt);
+      });
+      if (!regions.length) console.warn("Viloyatlar topilmadi. Ustun kalitlari:", Object.keys(rows[0]||{}));
+    }
+
+    function applyFilters() {
+      const selected = cleanRegionName(filterState.region);
+      const q = norm(filterState.loginQuery);
+
+      filteredRows = allRows.filter(row => {
+        if (selected) {
+          const rowRegion = pickRegion(row);
+          if (rowRegion !== selected) return false;
+        }
+        if (q) {
+          const login = norm(pickLogin(row));
+          if (!login.includes(q)) return false;
+        }
+        return true;
+      });
+
+      renderMap(filteredRows);
+      renderChartFromRows(filteredRows);
+      updateTitle(filteredRows.length);
+    }
+
+    function initFiltersUI() {
+      const regionSel = document.getElementById("cityFilter");
+      const loginInp  = document.getElementById("loginSearch");
+      const resetBtn  = document.getElementById("resetFilters");
+
+      regionSel.addEventListener("change", () => { filterState.region = regionSel.value; applyFilters(); });
+      loginInp.addEventListener("input", debounce(() => { filterState.loginQuery = loginInp.value || ""; applyFilters(); }, 300));
+      resetBtn.addEventListener("click", () => {
+        regionSel.value = ""; loginInp.value = "";
+        filterState.region = ""; filterState.loginQuery = "";
+        applyFilters();
+      });
+    }
+
+    // ===================== TABS =====================
+    function showTab(id) {
+      document.querySelectorAll(".tab-content").forEach(el => el.classList.remove("active"));
+      document.querySelectorAll(".tab").forEach(el => el.classList.remove("active"));
+      document.getElementById(id).classList.add("active");
+      document.querySelector(`.tab[onclick="showTab('${id}')"]`).classList.add("active");
+      if (id === "chartTab") renderChartFromRows(filteredRows);
+    }
+    window.showTab = showTab;
+
+    // ===================== LOAD =====================
+    async function loadClientsPhones() {
+      try {
+        const res = await fetch("clients.json");
+        const arr = await res.json();
+        phoneByLogin = new Map();
+        arr.forEach(obj => {
+          const login = norm(obj.userLogin || obj.ownerLogin || "");
+          if (login) phoneByLogin.set(login, String(obj.phone ?? "").trim());
         });
+      } catch (e) {
+        console.warn("clients.json yuklanmadi yoki format xato:", e);
+        phoneByLogin = new Map();
       }
+    }
 
-      // Boshlanishda yuklash
-      loadMapData();
-      loadChartData();
-    </script>
-  </body>
+    async function loadExcelAndRender() {
+      const res = await fetch("koordinatalar.xlsx");
+      const buffer = await res.arrayBuffer();
+      const wb = XLSX.read(buffer, { type: "array" });
+      const sheet = wb.Sheets[wb.SheetNames[0]];
+      allRows = XLSX.utils.sheet_to_json(sheet);
+      filteredRows = allRows.slice();
 
+      populateRegionSelect(allRows);
+      updateTitle(filteredRows.length);
+      renderMap(filteredRows);
+
+      const chartTabActive = document.getElementById("chartTab").classList.contains("active");
+      if (chartTabActive) renderChartFromRows(filteredRows);
+    }
+
+    // ===================== START =====================
+    (async () => {
+      initFiltersUI();
+      await loadClientsPhones();   // telefonlar xaritasi
+      await loadExcelAndRender();  // asosiy ma'lumotlar
+    })();
+  </script>
+</body>
 </html>
